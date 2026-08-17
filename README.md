@@ -43,15 +43,11 @@ Claude와 대화하며 서울시의 대기 배출시설 인허가 정보를 직�
 - `get_facility_info` 도구로 조회한 시설의 전체 34개 필드
 
 ### 📊 도구 3: `list_facility_statuses`
-영업상태별 시설 **현황을 조회**합니다.
+영업상태별 시설 **현황을 조회**합니다 (표본 최대 100건 기반 추정치).
 
-```
-반환 정보:
-  - 영업: n개
-  - 폐업: n개
-  - 휴업: n개
-  - 소재불명: n개
-```
+> ⚠️ **확인 필요**: `SALS_STTS_CD`의 코드-이름 매핑이 원 명세서(01=폐업,02=휴업,03=영업,04=소재불명)와
+> 실측 결과(01=영업, 04=폐쇄 확인됨)가 다릅니다. 정확한 전체 코드표는 미확인 상태이며,
+> 이 도구는 `SALS_STTS_NM` 문자열 값을 그대로 집계해 반환합니다.
 
 ---
 
@@ -155,20 +151,19 @@ flyctl deploy
 }
 ```
 
-### list_facility_statuses
+### list_facility_statuses (실측 응답 구조)
 
 ```json
 {
-  "query_timestamp": "2026-08-17T12:34:56Z",
+  "query_timestamp": "2026-08-17T12:34:56+00:00",
   "data_recency": "3일 지연",
   "statuses": {
-    "영업": 1234,
-    "폐업": 567,
-    "휴업": 89,
-    "소재불명": 12
+    "영업": 62,
+    "폐쇄": 38
   },
-  "total": 1902,
-  "note": "상태별 집계는 표본 기반 추정치입니다. 정확한 수치는 search_emission_facilities로 확인하세요."
+  "sample_size": 100,
+  "total_available": 5571,
+  "note": "상태별 집계는 표본(최대 100건) 기반 추정치입니다. 정확한 수치는 search_emission_facilities로 확인하세요."
 }
 ```
 
@@ -201,15 +196,17 @@ flyctl deploy
 |---|---|---|---|
 | MNG_NO | STRING | 시설 고유 관리번호 | - |
 | BPLC_NM | STRING | 사업장명 | - |
-| LCPMT_YMD | STRING | 인허가일자 | YYYYMMDD |
-| SALS_STTS_NM | STRING | 영업상태 | 영업/폐업/휴업/소재불명 |
+| LCPMT_YMD | STRING | 인허가일자 | YYYY-MM-DD (실측: 하이픈 포함) |
+| SALS_STTS_NM | STRING | 영업상태 | 실측 확인: "영업", "폐쇄" 등 (전체 코드표 확인 필요) |
 | ROAD_NM_ADDR | STRING | 도로명주소 | - |
-| XCRD | FLOAT | X좌표 (중부원점TM) | m (미터) |
-| YCRD | FLOAT | Y좌표 (중부원점TM) | m (미터) |
-| EMS_FCLT_OPER_HRM | INTEGER | 배출시설 조업시간 | 시간/일 |
-| EMS_FCLT_ANL_OPRTNG_DCNT | INTEGER | 배출시설 연간 가동일수 | 일 |
+| XCRD | STRING | X좌표 (중부원점TM) | 문자열, 뒤 공백 포함 (실측 확인) |
+| YCRD | STRING | Y좌표 (중부원점TM) | 문자열, 뒤 공백 포함 (실측 확인) |
+| EMS_FCLT_OPER_HRM | STRING | 배출시설 조업시간 | 시간/일 (문자열로 반환) |
+| EMS_FCLT_ANL_OPRTNG_DCNT | STRING | 배출시설 연간 가동일수 | 일 (문자열로 반환) |
 | CTGRY_NM | STRING | 배출시설 종별 | - |
-| ... | ... | (외 24개 필드) | ... |
+| ... | ... | (외 필드, 실측 시 총 30개 확인. 명세서 34개와 차이 있음) | ... |
+
+> ⚠️ 실측 결과 값 없는 날짜/우편번호 필드는 공백 문자열(예: `"          "`)로 채워져 반환됩니다 (null이 아님).
 
 ---
 

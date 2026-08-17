@@ -75,85 +75,116 @@
 
 ---
 
-## (이후 Claude Code에서 작성할 항목)
+## 2026-08-17 (구현 단계)
 
-### 항목 5: 구현 시작
+### 항목 5: 구현 완료
 
-**상태**: ⏳ 예정
+**상태**: ✅ 완료
 
-- [ ] requirements.txt 작성
-- [ ] seoul_api.py 구현
-- [ ] server.py 구현 (stateless_http=True 확인)
-- [ ] rate limit 미들웨어 구현
-- [ ] .env.example, .gitignore 작성
+- [x] requirements.txt 작성
+- [x] seoul_api.py 구현
+- [x] server.py 구현 (stateless_http=True 확인)
+- [x] rate limit 미들웨어 구현 (Starlette BaseHTTPMiddleware, mcp.run(middleware=[...]))
+- [x] .env.example, .gitignore 작성
 
-### 항목 6: 로컬 실측 테스트
+### 항목 6: 로컬 실측 테스트 결과
 
-**상태**: ⏳ 예정
+**상태**: ✅ 완료
 
-#### 테스트 계획:
+#### 중요 발견 1: URL 형식이 DEVPLAN 명세와 다름
+
+DEVPLAN 명세: `{BASE}/{TYPE}/{SERVICE}/{START}/{END}?key=<키>` (key는 쿼리 파라미터)
+
+**실측 결과**: key는 쿼리 파라미터가 아니라 **경로의 첫 요소**로 들어가야 정상 작동함.
+
 ```
-1. 첫 10건 조회 (정상 케이스)
-2. 응답 필드명 확인 (DEVPLAN 명세와 비교)
-3. 범위 초과 테스트 (1001건 → ERROR-336 기대)
-4. 필드 누락 상황 (폐업일자 등)
-5. 상태명 형식 (한글 여부, 코드값 매핑)
-6. 좌표값 타입 (float 확인)
-7. 인증키 오류 테스트 (ERROR-100)
-8. START_INDEX > END_INDEX 테스트 (ERROR-334)
+정상 동작: http://openapi.seoul.go.kr:8088/{KEY}/json/{SERVICE}/{START}/{END}
+실패(ERROR-300): http://openapi.seoul.go.kr:8088/json/{SERVICE}/{START}/{END}?key={KEY}
 ```
 
-**예상 발견 사항** (과거 다른 API 경험상):
-- JSON 응답에서 실제 필드명이 명세와 다를 가능성
-- 에러 메시지 형식이 문서와 미묘하게 다를 가능성
-- 선택 파라미터 조합에 따른 예상치 못한 오류 가능성
+서울 열린데이터광장 API의 공통 URL 패턴(key가 항상 첫 경로 세그먼트)을 따름. seoul_api.py에 이 형식으로 구현함.
 
-#### 테스트 결과 기록 영역 (실측 후 작성):
+#### 중요 발견 2: 응답 JSON 구조
+
+```json
+{
+  "LOCALDATA_093008": {
+    "list_total_count": 5571,
+    "RESULT": {"CODE": "INFO-000", "MESSAGE": "정상 처리되었습니다"},
+    "row": [ {...}, {...} ]
+  }
+}
 ```
-[실측 후 여기에 결과 기록]
 
-응답 필드명 (실제):
-- ...
+- `list_total_count` 필드 **존재 확인** (전체 이용가능 건수 제공됨)
+- 최상위 키가 서비스명(`LOCALDATA_093008`)으로 감싸져 있음 (명세서에 명시 안 됨)
 
-에러 코드 (실제):
-- ...
+#### 중요 발견 3: 일부 에러는 TYPE=json 요청에도 XML로 응답됨
 
-제약사항 (실제 발견):
-- ...
+`ERROR-336`(1000건 초과), `INFO-100`(인증키 오류) 등 특정 에러 케이스에서 `/json/` 경로로 요청했음에도
+아래처럼 **XML 형식**으로 응답이 돌아옴 (httpx `response.json()` 파싱 실패):
+
+```xml
+<RESULT><CODE>ERROR-336</CODE><MESSAGE><![CDATA[데이터요청은 한번에 최대 1000건을 넘을 수 없습니다...]]></MESSAGE></RESULT>
 ```
+
+**대응**: seoul_api.py의 `fetch_facilities`에서 `response.json()` 실패 시 정규식으로 `<CODE>`/`<MESSAGE>`를 추출하는 폴백 로직 추가.
+
+#### 중요 발견 4: SALS_STTS_CD/NM 매핑이 DEVPLAN 명세와 다름
+
+DEVPLAN 명세: `01: 폐업, 02: 휴업, 03: 영업, 04: 소재불명`
+
+**실측 결과**: `01 → "영업"`, `04 → "폐쇄"` 확인됨. 02/03 코드는 표본에서 발견되지 않아 미확인.
+
+**확인 필요**: 전체 코드-이름 매핑표를 신뢰할 수 없으므로, `list_facility_statuses` 도구는 코드가 아닌
+`SALS_STTS_NM` 문자열 값을 그대로 집계하도록 구현함 (기본값 방식, CLAUDE.md 규칙 3 적용).
+
+#### 중요 발견 5: 필드 타입 및 누락 처리
+
+- 값이 없는 날짜/우편번호 필드(`CLSBIZ_YMD`, `LCTN_ZIP` 등)는 **공백 문자열**로 채워져 반환됨 (예: `"          "`), null이 아님.
+- `XCRD`, `YCRD` 좌표값은 **문자열 타입**이며 뒤에 공백 패딩이 포함됨 (예: `"190145.164891265    "`). float 아님.
+- `EMS_FCLT_OPER_HRM`, `EMS_FCLT_ANL_OPRTNG_DCNT` 등 숫자성 필드도 전부 **문자열**로 반환됨.
+- `LCPMT_YMD`는 `YYYYMMDD`가 아니라 `YYYY-MM-DD` 형식(하이픈 포함)으로 반환됨.
+- 실측된 필드 수는 30개로, 명세서의 34개와 차이 있음 (`PVT_FCLT_ANL_OPRTNG_DCNT` 등 명세서 미기재 필드 존재, 반대로 명세서에 있으나 실측에 없는 필드도 있을 수 있음 — 전수 비교는 안 함).
+
+#### 실행한 테스트 결과 요약
+
+| # | 테스트 | 결과 |
+|---|---|---|
+| 1 | 첫 5건 조회 | ✅ 성공, count=5, total_count=5571 |
+| 2 | 범위 초과 (1002건) | ✅ ERROR-336 정상 매핑 (XML 폴백 확인) |
+| 3 | START_INDEX > END_INDEX | ✅ ERROR-334 정상 매핑 |
+| 4 | 잘못된 인증키 | ✅ INFO-100 정상 매핑 (XML 폴백 확인) |
+| 5 | get_facility_info (존재하는 관리번호) | ✅ found=True |
+| 6 | get_facility_info (존재하지 않는 관리번호) | ✅ found=False |
 
 ### 항목 7: FastMCP 스모크 테스트
 
-**상태**: ⏳ 예정
+**상태**: ✅ 완료
 
-- localhost:8000 에서 서버 시작
-- `/mcp` 경로 응답 확인
-- initialize 요청 성공 확인
-- 도구 목록 반환 확인
+- `python server.py` (PORT=8124)로 로컬 기동 확인
+- `/health` 커스텀 라우트 200 정상 응답 확인
+- `/mcp` 경로로 JSON-RPC `initialize` 요청 성공 (serverInfo 반환 확인)
+- `tools/list` 요청으로 3개 도구(search_emission_facilities, get_facility_info, list_facility_statuses) 정상 등록 확인
+- Rate limit 미들웨어 동작 확인: 분당 3회 초과 시 429 + "RATE_LIMIT_EXCEEDED" 정상 반환
 
 ### 항목 8: 배포 설정 작성
 
-**상태**: ⏳ 예정
+**상태**: ✅ 완료
 
-- Dockerfile (python:3.11-slim 기반)
-- fly.toml (nrt 리전, PORT=8000)
-- README 갱신
+- Dockerfile (python:3.11-slim 기반) 작성
+- fly.toml (nrt 리전, PORT=8000) 작성
+- README 갱신 (실측 결과 반영: 좌표/날짜 필드 타입, 상태값 실제 표기, list_facility_statuses 응답 구조)
 
 ### 항목 9: git 커밋 & push
 
-**상태**: ⏳ 예정
-
-```bash
-git add -A
-git commit -m "Initial commit: air-emission-facility-mcp implementation"
-git push origin main
-```
+**상태**: ⏳ 진행 예정 (다음 단계)
 
 ### 항목 10: 사용자 안내
 
-**상태**: ⏳ 예정
+**상태**: ⏳ 진행 예정
 
-CLAUDE.md "작업 완료" 섹션의 안내 문구 출력 후 정지.
+CLAUDE.md "작업 완료" 섹션의 안내 문구 출력 후 정지 예정.
 
 ---
 
